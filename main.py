@@ -1,6 +1,7 @@
 import os
 import time
 import json
+import re
 import requests
 from playwright.sync_api import sync_playwright
 
@@ -9,7 +10,7 @@ TELEGRAM_BOT_TOKEN = os.getenv('TG_TOKEN')
 TELEGRAM_CHANNEL_ID = os.getenv('TG_CHAT_ID')
 HISTORY_FILE = "history_avia.json"
 
-# Полный список твоих городов с IATA кодами
+# Список городов вылета и их IATA коды (нужны для ссылки)
 ORIGINS = {
     "Москва": "MOW",
     "Санкт-Петербург": "LED",
@@ -21,7 +22,7 @@ ORIGINS = {
     "Новосибирск": "OVB",
     "Казань": "KZN",
     "Уфа": "UFA",
-    "Краснодар": "KRR", # (Аэропорт закрыт, но мониторим на будущее)
+    "Краснодар": "KRR",
     "Владивосток": "VVO",
     "Калининград": "KGD",
     "Волгоград": "VOG",
@@ -33,18 +34,17 @@ ORIGINS = {
     "Благовещенск": "BQS",
     "Хабаровск": "KHV",
     "Махачкала": "MCX",
-    # СНГ
     "Астана": "NQZ",
     "Алматы": "ALA",
     "Ташкент": "TAS"
 }
 
-# Флаги для красоты
+# Флаги (скрипт сам попробует угадать, но основные пропишем)
 FLAGS = {
-    "RU": "🇷🇺", "TR": "🇹🇷", "TH": "🇹🇭", "AE": "🇦🇪", "EG": "🇪🇬", 
-    "CN": "🇨🇳", "VN": "🇻🇳", "MV": "🇲🇻", "LK": "🇱🇰", "CU": "🇨🇺",
-    "KZ": "🇰🇿", "UZ": "🇺🇿", "AM": "🇦🇲", "GE": "🇬🇪", "AZ": "🇦🇿",
-    "BY": "🇧🇾", "KG": "🇰🇬", "TJ": "🇹🇯", "RS": "🇷🇸", "IN": "🇮🇳"
+    "Россия": "🇷🇺", "Турция": "🇹🇷", "Таиланд": "🇹🇭", "ОАЭ": "🇦🇪", "Египет": "🇪🇬", 
+    "Китай": "🇨🇳", "Вьетнам": "🇻🇳", "Мальдивы": "🇲🇻", "Шри-Ланка": "🇱🇰", "Куба": "🇨🇺",
+    "Беларусь": "🇧🇾", "Казахстан": "🇰🇿", "Узбекистан": "🇺🇿", "Армения": "🇦🇲", 
+    "Грузия": "🇬🇪", "Азербайджан": "🇦🇿", "Индия": "🇮🇳"
 }
 
 # --- ФУНКЦИИ ---
@@ -71,107 +71,177 @@ def send_telegram_message(text):
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
         payload = {"chat_id": TELEGRAM_CHANNEL_ID, "text": text, "parse_mode": "HTML"}
         requests.post(url, json=payload, timeout=10)
-        time.sleep(0.05) # Микро-пауза
+        time.sleep(0.1)
     except: pass
 
-def fetch_prices_for_city(page, city_name, iata_code):
-    print(f"✈️ Сканирую: {city_name} ({iata_code})...")
-    # API карты Aviasales (one_way=true - в одну сторону)
-    api_url = f"https://map.aviasales.ru/supported_directions.json?origin_iata={iata_code}&one_way=true&locale=ru"
-    
-    try:
-        response = page.goto(api_url)
-        data = json.loads(page.text_content("body"))
-        if "data" in data:
-            return data["data"]
-        return []
-    except Exception as e:
-        print(f"   ⚠️ Ошибка API: {e}")
-        return []
+def parse_price(text):
+    """Превращает 'от 3 154 ₽' в число 3154"""
+    if not text: return 0
+    clean = re.sub(r'[^0-9]', '', text)
+    if clean:
+        return int(clean)
+    return 0
 
-def process_city(city_name, iata_code, directions, history):
-    if iata_code not in history:
-        history[iata_code] = {}
-        is_new_city_in_history = True
+def scrape_list(page, origin_name, iata, mode="world"):
+    """
+    Парсит список направлений.
+    mode='world' -> ссылка с zoom=1.3 (страны)
+    mode='russia' -> ссылка с zoom=4 (города РФ)
+    """
+    
+    # Формируем ссылку как ты просил
+    if mode == "world":
+        # Ссылка для стран
+        url = f"https://www.aviasales.ru/map?center=98.189,62.485&params={iata}ANYWHERE1&zoom=1.3"
+        print(f"   🌍 Мир: {url}")
     else:
-        is_new_city_in_history = False
-    
-    # Счетчик снижений цен
-    drops_count = 0
-    
-    for item in directions:
-        dest_code = item.get("iata")       # Код назначения (например IST)
-        dest_name = item.get("name")       # Название (Стамбул)
-        country_code = item.get("country") # Страна (TR)
-        price = item.get("value")          # Цена
+        # Ссылка для городов РФ (zoom побольше и центр смещен)
+        url = f"https://www.aviasales.ru/map?center=98.189,68.148&params={iata}ANYWHERE1&zoom=4"
+        print(f"   🇷🇺 РФ: {url}")
+
+    results = {} # Словарь: {"Название": Цена}
+
+    try:
+        page.goto(url, timeout=60000, wait_until="domcontentloaded")
         
-        if not price or not dest_code: continue
-        
+        # Ждем появления списка цен слева (ждем любой из твоих селекторов)
+        try:
+            # Ждем либо страну, либо город
+            page.wait_for_selector("[data-test-id='country-name'], [data-test-id='city-name']", timeout=15000)
+        except:
+            print("      ⚠️ Список не загрузился (пусто).")
+            return results
+
+        # Даем чуть прогрузиться анимациям
+        time.sleep(3)
+
+        # 1. СОБИРАЕМ СТРАНЫ (если режим world)
+        if mode == "world":
+            # Ищем все элементы с data-test-id="country-name"
+            # Твой код: <div data-test-id="country-name">Турция</div>
+            # Цена лежит в кнопке-родителе, в соседнем диве
+            
+            # Находим все кнопки, содержащие страны
+            buttons = page.locator("button:has([data-test-id='country-name'])").all()
+            for btn in buttons:
+                try:
+                    name_el = btn.locator("[data-test-id='country-name']").first
+                    price_el = btn.locator("[data-test-id='text']").last # Цена обычно последняя с таким ID
+                    
+                    name = name_el.inner_text().strip()
+                    price_text = price_el.inner_text().strip()
+                    
+                    price = parse_price(price_text)
+                    if price > 0:
+                        results[name] = price
+                except: continue
+
+        # 2. СОБИРАЕМ ГОРОДА (если режим russia)
+        else:
+            # Ищем все элементы с data-test-id="city-name"
+            # Твой код: <div data-test-id="city-name">Псков</div>
+            
+            buttons = page.locator("button:has([data-test-id='city-name'])").all()
+            for btn in buttons:
+                try:
+                    name_el = btn.locator("[data-test-id='city-name']").first
+                    price_el = btn.locator("[data-test-id='text']").last
+                    
+                    name = name_el.inner_text().strip()
+                    price_text = price_el.inner_text().strip()
+                    
+                    price = parse_price(price_text)
+                    if price > 0:
+                        results[name] = price
+                except: continue
+
+    except Exception as e:
+        print(f"      ❌ Ошибка парсинга: {e}")
+    
+    return results
+
+def process_city_data(origin_name, iata, results, history):
+    if iata not in history:
+        history[iata] = {}
+
+    count_drops = 0
+    
+    for dest_name, price in results.items():
         # Получаем старую цену
-        old_price = history[iata_code].get(dest_code)
-        
-        should_notify = False
-        msg = ""
-        flag = FLAGS.get(country_code, "") # Флаг или пусто
+        old_price = history[iata].get(dest_name)
         
         # ЛОГИКА УВЕДОМЛЕНИЙ
+        should_notify = False
+        msg = ""
         
-        # 1. Если цена уже была и она СНИЗИЛАСЬ
+        flag = FLAGS.get(dest_name, "")
+        if not flag and dest_name in ["Россия", "Казань", "Сочи", "Москва", "Санкт-Петербург", "Калининград"]: 
+             flag = "🇷🇺"
+
         if old_price:
             if price < old_price:
                 diff = old_price - price
-                
-                # Фильтр шума:
-                # Уведомляем только если скидка > 100 руб И (либо это 5% цены, либо скидка > 500р)
-                # Это уберет колебания курса валют на 20-30 рублей.
-                if diff > 100 and (diff / old_price > 0.05 or diff > 500):
+                # Фильтр: скидка > 100р и (либо >3%, либо >500р)
+                if diff > 100 and (diff / old_price > 0.03 or diff > 500):
                     msg = (
-                        f"📉 <b>Билеты подешевели!</b>\n"
-                        f"✈️ {city_name} -> {flag} {dest_name}\n"
+                        f"📉 <b>Цена СНИЗИЛАСЬ!</b>\n"
+                        f"✈️ {origin_name} -> {flag} {dest_name}\n"
                         f"💰 <b>{price:,} ₽</b> (было {old_price:,})\n"
-                        f"🔥 Скидка: {diff:,} ₽"
+                        f"🔻 Выгода: {diff:,} ₽"
                     )
                     should_notify = True
-                    drops_count += 1
+                    count_drops += 1
         
-        # 2. Если это первый запуск для этого города (или новое направление)
-        # Раскомментируй строки ниже, если хочешь видеть ВСЕ цены при первом запуске.
-        # Сейчас я это отключил, чтобы тебя не завалило 5000 сообщений при старте.
-        # else:
-        #    # Это новое направление
-        #    pass 
-
-        # Сохраняем в историю (перезаписываем всегда актуальной ценой)
-        history[iata_code][dest_code] = price
+        # Обновляем историю
+        history[iata][dest_name] = price
         
         if should_notify:
             send_telegram_message(msg)
-            print(f"   🔔 {city_name}->{dest_name}: {price}")
+            print(f"      🔔 Отправлено: {dest_name} {price}")
 
-    if drops_count > 0:
-        print(f"   ✅ Найдено снижений: {drops_count}")
+    if count_drops > 0:
+        print(f"      ✅ Снижений: {count_drops}")
     else:
-        print("   💤 Изменений нет.")
+        print(f"      💤 Найдено {len(results)} направлений, без снижений.")
+
 
 def main():
-    print("🚀 AVIASALES BOT STARTED")
+    print("🚀 AVIASALES VISUAL PARSER STARTED")
     history = load_history()
-    print(f"📚 В базе городов: {len(history)}")
     
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
+        # Важно: ставим user_agent, чтобы выглядеть как обычный браузер
+        browser = p.chromium.launch(
+            headless=True,
+            args=['--disable-blink-features=AutomationControlled']
+        )
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            viewport={'width': 1920, 'height': 1080}
+        )
+        page = context.new_page()
         
-        for city, code in ORIGINS.items():
-            directions = fetch_prices_for_city(page, city, code)
-            if directions:
-                process_city(city, code, directions, history)
-            time.sleep(1) # Пауза, чтобы API не ругался
+        for city, iata in ORIGINS.items():
+            print(f"\n✈️ {city} ({iata})")
+            
+            # 1. Проход по МИРУ (Страны)
+            world_results = scrape_list(page, city, iata, mode="world")
+            if world_results:
+                process_city_data(city, iata, world_results, history)
+            
+            time.sleep(1) # Короткая передышка
+            
+            # 2. Проход по РОССИИ (Города)
+            russia_results = scrape_list(page, city, iata, mode="russia")
+            if russia_results:
+                process_city_data(city, iata, russia_results, history)
+            
+            time.sleep(2) # Пауза перед следующим городом
         
         browser.close()
     
     save_history(history)
-    print("💾 История цен сохранена.")
+    print("\n💾 История цен сохранена.")
 
 if __name__ == "__main__":
     main()
