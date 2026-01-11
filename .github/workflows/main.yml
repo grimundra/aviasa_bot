@@ -1,0 +1,40 @@
+name: Aviasales Price Hunter
+
+on:
+  schedule:
+    - cron: '0 6,18 * * *' # Запуск в 09:00 и 21:00 МСК
+  workflow_dispatch:      # Ручной запуск
+
+permissions:
+  contents: write
+
+jobs:
+  check-flights:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          pip install requests playwright
+          playwright install chromium
+
+      - name: Run script
+        env:
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: python -u main_avia.py
+
+      - name: Save History
+        run: |
+          git config --global user.name 'AviaBot'
+          git config --global user.email 'bot@noreply.github.com'
+          git add history_avia.json
+          git commit -m "Update avia prices" || exit 0
+          git push
