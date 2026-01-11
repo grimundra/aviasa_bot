@@ -2,11 +2,11 @@ name: Avia Price Hunter
 
 on:
   schedule:
-    - cron: '0 6,18 * * *' # Запуск в 09:00 и 21:00 МСК
-  workflow_dispatch:      # Ручной запуск
+    - cron: '0 5,11,17,23 * * *' # 4 раза в сутки
+  workflow_dispatch:      # Кнопка ручного запуска
 
 permissions:
-  contents: write # Разрешаем сохранять историю
+  contents: write
 
 jobs:
   check-flights:
