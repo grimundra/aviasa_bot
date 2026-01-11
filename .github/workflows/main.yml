@@ -1,4 +1,4 @@
-name: Aviasales Price Hunter
+name: Avia Price Hunter
 
 on:
   schedule:
@@ -6,7 +6,7 @@ on:
   workflow_dispatch:      # Ручной запуск
 
 permissions:
-  contents: write
+  contents: write # Разрешаем сохранять историю
 
 jobs:
   check-flights:
@@ -29,12 +29,12 @@ jobs:
         env:
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-        run: python -u main_avia.py
+        run: python -u main.py
 
       - name: Save History
         run: |
           git config --global user.name 'AviaBot'
           git config --global user.email 'bot@noreply.github.com'
           git add history_avia.json
-          git commit -m "Update avia prices" || exit 0
+          git commit -m "Update prices" || exit 0
           git push
