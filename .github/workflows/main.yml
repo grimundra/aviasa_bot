@@ -22,13 +22,17 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install requests playwright
+          pip install requests playwright playwright-stealth
           playwright install chromium
 
       - name: Run script
         env:
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          PROXY_LOGIN: ${{ secrets.PROXY_LOGIN }}
+          PROXY_PASS: ${{ secrets.PROXY_PASS }}
+          PROXY_IP: ${{ secrets.PROXY_IP }}
+          PROXY_PORT: ${{ secrets.PROXY_PORT }}
         run: python -u main.py
 
       - name: Save History
