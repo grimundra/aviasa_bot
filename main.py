@@ -11,6 +11,11 @@ TELEGRAM_BOT_TOKEN = os.getenv('TG_TOKEN')
 TELEGRAM_CHANNEL_ID = os.getenv('TG_CHAT_ID')
 HISTORY_FILE = "history_avia.json"
 
+PROXY_LOGIN = os.getenv('PROXY_LOGIN')
+PROXY_PASS = os.getenv('PROXY_PASS')
+PROXY_IP = os.getenv('PROXY_IP')
+PROXY_PORT = os.getenv('PROXY_PORT')
+
 ORIGINS = {
     "Москва": "MOW", "Санкт-Петербург": "LED", "Екатеринбург": "SVX",
     "Сочи": "AER", "Самара": "KUF", "Нижний Новгород": "GOJ",
@@ -143,19 +148,32 @@ def analyze_and_notify(origin_name, iata, results, history, is_russia):
     if count_drops > 0: print(f"      ✅ {'РФ' if is_russia else 'Мир'}: Снижений - {count_drops}")
 
 def main():
-    print("🚀 AVIASALES CLICKER STARTED")
+    print("🚀 AVIASALES CLICKER STARTED (PROXY ENABLED)")
     history = load_history()
     
     with sync_playwright() as p:
+        # Готовим настройки прокси, если они заданы в окружении
+        proxy_settings = None
+        if PROXY_IP and PROXY_PORT:
+            proxy_settings = {
+                "server": f"http://{PROXY_IP}:{PROXY_PORT}",
+                "username": PROXY_LOGIN,
+                "password": PROXY_PASS
+            }
+            print(f"🛡️ Прокси подключен: {PROXY_IP}:{PROXY_PORT}")
+        else:
+            print("⚠️ Прокси не настроен, работаем напрямую!")
+
+        # Запускаем браузер ВМЕСТЕ с прокси
         browser = p.chromium.launch(
-            headless=True, # Оставляем True, т.к. на GitHub Actions нет экрана
+            headless=True,
+            proxy=proxy_settings, # <--- ПЕРЕДАЕМ ПРОКСИ СЮДА
             args=['--disable-blink-features=AutomationControlled']
         )
-        # Убрали жесткий User-Agent, пусть Playwright сам подставит надежный
         context = browser.new_context(viewport={'width': 1920, 'height': 1080})
         page = context.new_page()
         
-        stealth_sync(page) # <--- НАКИДЫВАЕМ ПЛАЩ-НЕВИДИМКУ
+        stealth_sync(page) # Плащ-невидимка
         
         for city, iata in ORIGINS.items():
             print(f"\n✈️ {city} ({iata})")
@@ -166,6 +184,3 @@ def main():
     
     save_history(history)
     print("\n💾 История сохранена.")
-
-if __name__ == "__main__":
-    main()
