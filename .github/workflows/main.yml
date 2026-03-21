@@ -2,8 +2,8 @@ name: Avia Price Hunter
 
 on:
   schedule:
-    - cron: '0 5,10,14,18 * * *' # 4 раза в сутки
-  workflow_dispatch:      # Кнопка ручного запуска
+    - cron: '0 5,10,14,18 * * *'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -22,7 +22,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install requests playwright playwright-stealth
+          pip install requests playwright
           playwright install chromium
 
       - name: Run script
