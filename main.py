@@ -83,9 +83,7 @@ def process_page(page, origin_name, iata, history):
     for attempt in range(1, 3):
         try:
             if attempt > 1: print(f"      🔄 Попытка {attempt}: перезагружаем...")
-            # Быстрая загрузка
             page.goto(url, timeout=60000, wait_until="domcontentloaded")
-            # Ждем новый класс коллекций
             page.wait_for_selector("[data-test-id='price-map-v2-cities-collection']", timeout=20000)
             success = True
             break
@@ -93,7 +91,6 @@ def process_page(page, origin_name, iata, history):
             print(f"      ⚠️ Ошибка на попытке {attempt}.")
             time.sleep(2)
 
-    # Фотофиксация ошибки
     if not success:
         print("      ❌ Контейнеры стран не появились. Делаю скриншот...")
         screenshot_path = f"error_{iata}.png"
@@ -104,7 +101,21 @@ def process_page(page, origin_name, iata, history):
         except: pass
         return
 
-    time.sleep(3)
+    time.sleep(2)
+
+    # ==========================================
+    # 🪄 ИМИТАЦИЯ СКРОЛЛИНГА (Подгрузка всех стран)
+    # ==========================================
+    print("      🖱️ Прокручиваем страницу вниз, чтобы подтянуть ВСЕ страны...")
+    prev_height = page.evaluate("document.body.scrollHeight")
+    for _ in range(12):  # Крутим вниз до 12 раз
+        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        time.sleep(1.5)  # Ждем подгрузки
+        new_height = page.evaluate("document.body.scrollHeight")
+        if new_height == prev_height:
+            break  # Достигли самого низа
+        prev_height = new_height
+    # ==========================================
 
     results_world = {}
     russia_all_cities_btn = None
@@ -153,8 +164,17 @@ def process_page(page, origin_name, iata, history):
         try:
             # Ждем появления карточек на новой странице
             page.wait_for_selector("button[data-test-id='city-card']", timeout=15000)
-            time.sleep(2)
             
+            # Снова скроллим, чтобы подгрузить все города России!
+            print("      🖱️ Прокручиваем список городов РФ...")
+            prev_h = page.evaluate("document.body.scrollHeight")
+            for _ in range(8):
+                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                time.sleep(1.5)
+                new_h = page.evaluate("document.body.scrollHeight")
+                if new_h == prev_h: break
+                prev_h = new_h
+
             results_russia = {}
             city_cards = page.locator("button[data-test-id='city-card']").all()
             for card in city_cards:
@@ -172,7 +192,7 @@ def process_page(page, origin_name, iata, history):
     else:
         print("      ⚠️ Блок 'Россия' или кнопка 'Все города' не найдены.")
 
-# Обновленная функция отправки: теперь она работает со структурой {"price": 100, "country": "Турция"}
+# Обновленная функция отправки
 def analyze_and_notify(origin_name, iata, results, history, is_russia):
     if iata not in history: history[iata] = {}
     if not results:
