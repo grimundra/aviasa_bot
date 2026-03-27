@@ -80,11 +80,22 @@ def process_page(page, origin_name, iata, history):
     print(f"    🌍 Загрузка карты: {url}")
     
     success = False
+    interface_type = None
+    
     for attempt in range(1, 3):
         try:
             if attempt > 1: print(f"      🔄 Попытка {attempt}: перезагружаем...")
             page.goto(url, timeout=60000, wait_until="domcontentloaded")
-            page.wait_for_selector("[data-test-id='price-map-v2-cities-collection']", timeout=20000)
+            
+            # МАГИЯ ЗДЕСЬ: Ждем появления ЛИБО старого, ЛИБО нового интерфейса (через запятую)
+            page.wait_for_selector("[data-test-id='price-map-v2-cities-collection'], [data-test-id='country-name']", timeout=20000)
+            
+            # Проверяем, какой именно интерфейс нам отдал сервер
+            if page.locator("[data-test-id='price-map-v2-cities-collection']").count() > 0:
+                interface_type = "new"
+            else:
+                interface_type = "old"
+                
             success = True
             break
         except:
@@ -96,103 +107,142 @@ def process_page(page, origin_name, iata, history):
         screenshot_path = f"error_{iata}.png"
         try:
             page.screenshot(path=screenshot_path)
-            send_telegram_photo(screenshot_path, f"⚠️ Ошибка парсинга: {origin_name} ({iata})\nНовый интерфейс не загрузился.")
+            send_telegram_photo(screenshot_path, f"⚠️ Ошибка парсинга: {origin_name} ({iata})\nНи один интерфейс не загрузился.")
             if os.path.exists(screenshot_path): os.remove(screenshot_path)
         except: pass
         return
 
     time.sleep(2)
 
-    # ==========================================
-    # 🪄 ИМИТАЦИЯ СКРОЛЛИНГА (Подгрузка всех стран)
-    # ==========================================
-    print("      🖱️ Прокручиваем страницу вниз, чтобы подтянуть ВСЕ страны...")
-    prev_height = page.evaluate("document.body.scrollHeight")
-    for _ in range(12):  # Крутим вниз до 12 раз
-        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-        time.sleep(1.5)  # Ждем подгрузки
-        new_height = page.evaluate("document.body.scrollHeight")
-        if new_height == prev_height:
-            break  # Достигли самого низа
-        prev_height = new_height
-    # ==========================================
+    if interface_type == "new":
+        print("      ✨ Обнаружен НОВЫЙ интерфейс (Города)")
+        # ==========================================
+        # НОВЫЙ ИНТЕРФЕЙС (СКРОЛЛИНГ И ГОРОДА)
+        # ==========================================
+        print("      🖱️ Прокручиваем страницу вниз...")
+        prev_height = page.evaluate("document.body.scrollHeight")
+        for _ in range(12):
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            time.sleep(1.5)
+            new_height = page.evaluate("document.body.scrollHeight")
+            if new_height == prev_height: break
+            prev_height = new_height
 
-    results_world = {}
-    russia_all_cities_btn = None
-    
-    # 1. ПАРСИМ МИР ПО НОВОЙ СТРУКТУРЕ (БЛОКАМ)
-    collections = page.locator("[data-test-id='price-map-v2-cities-collection']").all()
-    
-    for col in collections:
-        try:
-            # Название страны
-            country_name = col.locator("h3[data-test-id='text']").inner_text().strip()
-            
-            if "Россия" in country_name:
-                # Запоминаем кнопку "Все города" для России
-                btn = col.locator("button[data-test-id='all-cities-button']")
-                if btn.count() > 0:
-                    russia_all_cities_btn = btn.first
-                continue # Пропускаем парсинг России тут, пойдем на полную страницу
-            
-            # Парсим карточки городов внутри блока страны
-            city_cards = col.locator("button[data-test-id='city-card']").all()
-            for card in city_cards:
-                try:
-                    city_name = card.locator("[data-test-id='city-name']").inner_text().strip()
-                    price_text = card.locator("[data-test-id='text']").inner_text().strip()
-                    price = parse_price(price_text)
-                    if price > 0:
-                        # Сохраняем и город, и страну, чтобы потом подтянуть флаг
-                        results_world[city_name] = {"price": price, "country": country_name}
-                except: continue
-        except: continue
+        results_world = {}
+        russia_all_cities_btn = None
         
-    analyze_and_notify(origin_name, iata, results_world, history, is_russia=False)
+        collections = page.locator("[data-test-id='price-map-v2-cities-collection']").all()
+        for col in collections:
+            try:
+                country_name = col.locator("h3[data-test-id='text']").inner_text().strip()
+                if "Россия" in country_name:
+                    btn = col.locator("button[data-test-id='all-cities-button']")
+                    if btn.count() > 0: russia_all_cities_btn = btn.first
+                    continue 
+                
+                city_cards = col.locator("button[data-test-id='city-card']").all()
+                for card in city_cards:
+                    try:
+                        city_name = card.locator("[data-test-id='city-name']").inner_text().strip()
+                        price_text = card.locator("[data-test-id='text']").inner_text().strip()
+                        price = parse_price(price_text)
+                        if price > 0:
+                            results_world[city_name] = {"price": price, "country": country_name}
+                    except: continue
+            except: continue
+            
+        analyze_and_notify(origin_name, iata, results_world, history, is_russia=False)
 
-    # 2. КЛИКАЕМ "ВСЕ ГОРОДА" ДЛЯ РОССИИ
-    if russia_all_cities_btn:
-        print("      🖱️ Кликаю 'Все города' для России...")
-        try:
-            russia_all_cities_btn.scroll_into_view_if_needed()
-            time.sleep(1)
-            russia_all_cities_btn.click()
-        except Exception as e:
-            print(f"      ⚠️ Ошибка клика 'Все города': {e}")
-            return
-            
-        try:
-            # Ждем появления карточек на новой странице
-            page.wait_for_selector("button[data-test-id='city-card']", timeout=15000)
-            
-            # Снова скроллим, чтобы подгрузить все города России!
-            print("      🖱️ Прокручиваем список городов РФ...")
-            prev_h = page.evaluate("document.body.scrollHeight")
-            for _ in range(8):
-                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                time.sleep(1.5)
-                new_h = page.evaluate("document.body.scrollHeight")
-                if new_h == prev_h: break
-                prev_h = new_h
+        if russia_all_cities_btn:
+            print("      🖱️ Кликаю 'Все города' для России...")
+            try:
+                russia_all_cities_btn.scroll_into_view_if_needed()
+                time.sleep(1)
+                russia_all_cities_btn.click()
+                
+                page.wait_for_selector("button[data-test-id='city-card']", timeout=15000)
+                
+                print("      🖱️ Прокручиваем список городов РФ...")
+                prev_h = page.evaluate("document.body.scrollHeight")
+                for _ in range(8):
+                    page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                    time.sleep(1.5)
+                    new_h = page.evaluate("document.body.scrollHeight")
+                    if new_h == prev_h: break
+                    prev_h = new_h
 
-            results_russia = {}
-            city_cards = page.locator("button[data-test-id='city-card']").all()
-            for card in city_cards:
-                try:
-                    city_name = card.locator("[data-test-id='city-name']").inner_text().strip()
-                    price_text = card.locator("[data-test-id='text']").inner_text().strip()
-                    price = parse_price(price_text)
-                    if price > 0:
-                        results_russia[city_name] = {"price": price, "country": "Россия"}
-                except: continue
-            
-            analyze_and_notify(origin_name, iata, results_russia, history, is_russia=True)
-        except:
-            print("      ⚠️ Страница 'Все города' РФ не загрузилась.")
+                results_russia = {}
+                city_cards = page.locator("button[data-test-id='city-card']").all()
+                for card in city_cards:
+                    try:
+                        city_name = card.locator("[data-test-id='city-name']").inner_text().strip()
+                        price_text = card.locator("[data-test-id='text']").inner_text().strip()
+                        price = parse_price(price_text)
+                        if price > 0:
+                            results_russia[city_name] = {"price": price, "country": "Россия"}
+                    except: continue
+                analyze_and_notify(origin_name, iata, results_russia, history, is_russia=True)
+            except:
+                print("      ⚠️ Страница 'Все города' РФ не загрузилась.")
+        else:
+            print("      ⚠️ Блок 'Россия' не найден.")
+
     else:
-        print("      ⚠️ Блок 'Россия' или кнопка 'Все города' не найдены.")
+        print("      🕰️ Обнаружен СТАРЫЙ интерфейс (Страны)")
+        # ==========================================
+        # СТАРЫЙ ИНТЕРФЕЙС (МИР -> КЛИК НА РФ)
+        # ==========================================
+        results_world = {}
+        russia_button = None 
+        
+        buttons = page.locator("button:has([data-test-id='country-name'])").all()
+        for btn in buttons:
+            try:
+                name_el = btn.locator("[data-test-id='country-name']").first
+                price_el = btn.locator("[data-test-id='text']").last
+                
+                name = name_el.inner_text().strip()
+                price_text = price_el.inner_text().strip()
+                price = parse_price(price_text)
+                
+                if price > 0:
+                    # Старый интерфейс собирал страны, пакуем их в новый формат
+                    results_world[name] = {"price": price, "country": name}
+                
+                if "Россия" in name:
+                    russia_button = btn
+            except: continue
+            
+        analyze_and_notify(origin_name, iata, results_world, history, is_russia=False)
 
-# Обновленная функция отправки
+        if russia_button:
+            print("      🖱️ Кликаю на 'Россия'...")
+            try:
+                russia_button.click()
+                page.wait_for_selector("[data-test-id='city-name']", timeout=10000)
+                time.sleep(2) 
+                
+                results_russia = {}
+                city_buttons = page.locator("button:has([data-test-id='city-name'])").all()
+                for btn in city_buttons:
+                    try:
+                        name_el = btn.locator("[data-test-id='city-name']").first
+                        price_el = btn.locator("[data-test-id='text']").last
+                        
+                        name = name_el.inner_text().strip()
+                        price_text = price_el.inner_text().strip()
+                        price = parse_price(price_text)
+                        
+                        if price > 0:
+                            results_russia[name] = {"price": price, "country": "Россия"}
+                    except: continue
+                
+                analyze_and_notify(origin_name, iata, results_russia, history, is_russia=True)
+            except:
+                print("      ⚠️ Список городов РФ не открылся.")
+        else:
+            print("      ⚠️ Кнопка 'Россия' не найдена.")
+            
 def analyze_and_notify(origin_name, iata, results, history, is_russia):
     if iata not in history: history[iata] = {}
     if not results:
