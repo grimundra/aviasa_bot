@@ -97,8 +97,7 @@ def process_page(page, origin_name, iata, history):
             if attempt > 1:
                 print(f"      🔄 Попытка {attempt}: страница тупит, пробуем перезагрузить...")
             
-            # ИЗМЕНЕНИЕ: Меняем domcontentloaded на load 
-            # (load надежнее, чем networkidle, так как метрики Яндекса могут держать сеть вечно)
+            # Ждем именно загрузки всех ресурсов страницы (load)
             page.goto(url, timeout=60000, wait_until="load")
             
             # Ждем загрузки списка стран
@@ -116,78 +115,80 @@ def process_page(page, origin_name, iata, history):
         print("      ❌ Список стран так и не появился. Пропускаем город.")
         return
 
-        time.sleep(3) # Анимации
+    # ВНИМАНИЕ: отступы вернулись на место!
+    time.sleep(3) # Анимации
 
-        # ================================
-        # ЭТАП 1: ПАРСИМ СТРАНЫ (МИР)
-        # ================================
-        results_world = {}
-        russia_button = None # Сюда запомним кнопку "Россия"
-        
-        # Ищем все кнопки со странами
-        buttons = page.locator("button:has([data-test-id='country-name'])").all()
-        
-        for btn in buttons:
-            try:
-                name_el = btn.locator("[data-test-id='country-name']").first
-                price_el = btn.locator("[data-test-id='text']").last
-                
-                name = name_el.inner_text().strip()
-                price_text = price_el.inner_text().strip()
-                price = parse_price(price_text)
-                
-                if price > 0:
-                    results_world[name] = price
-                
-                # Если нашли Россию - запоминаем эту кнопку, чтобы потом кликнуть
-                if "Россия" in name:
-                    russia_button = btn
-                    
-            except: continue
+    # ================================
+    # ЭТАП 1: ПАРСИМ СТРАНЫ (МИР)
+    # ================================
+    results_world = {}
+    russia_button = None # Сюда запомним кнопку "Россия"
+    
+    # Ищем все кнопки со странами
+    buttons = page.locator("button:has([data-test-id='country-name'])").all()
+    
+    for btn in buttons:
+        try:
+            name_el = btn.locator("[data-test-id='country-name']").first
+            price_el = btn.locator("[data-test-id='text']").last
             
-        # Обрабатываем и сохраняем МИР
-        analyze_and_notify(origin_name, iata, results_world, history, is_russia=False)
+            name = name_el.inner_text().strip()
+            price_text = price_el.inner_text().strip()
+            price = parse_price(price_text)
+            
+            if price > 0:
+                results_world[name] = price
+            
+            # Если нашли Россию - запоминаем эту кнопку, чтобы потом кликнуть
+            if "Россия" in name:
+                russia_button = btn
+                
+        except: continue
+        
+    # Обрабатываем и сохраняем МИР
+    analyze_and_notify(origin_name, iata, results_world, history, is_russia=False)
 
-        # ================================
-        # ЭТАП 2: КЛИКАЕМ И ПАРСИМ РОССИЮ
-        # ================================
-        if russia_button:
-            print("      🖱️ Кликаю на 'Россия'...")
+    # ================================
+    # ЭТАП 2: КЛИКАЕМ И ПАРСИМ РОССИЮ
+    # ================================
+    if russia_button:
+        print("      🖱️ Кликаю на 'Россия'...")
+        try:
             russia_button.click()
+        except:
+            print("      ⚠️ Не удалось кликнуть по кнопке 'Россия'.")
+            return
             
-            # Ждем появления ГОРОДОВ (city-name)
-            try:
-                page.wait_for_selector("[data-test-id='city-name']", timeout=10000)
-                time.sleep(2) # Даем списку прогрузиться
-                
-                results_russia = {}
-                # Теперь ищем кнопки с городами
-                city_buttons = page.locator("button:has([data-test-id='city-name'])").all()
-                
-                for btn in city_buttons:
-                    try:
-                        name_el = btn.locator("[data-test-id='city-name']").first
-                        price_el = btn.locator("[data-test-id='text']").last
-                        
-                        name = name_el.inner_text().strip()
-                        price_text = price_el.inner_text().strip()
-                        price = parse_price(price_text)
-                        
-                        if price > 0:
-                            results_russia[name] = price
-                    except: continue
-                
-                # Обрабатываем и сохраняем РОССИЮ
-                analyze_and_notify(origin_name, iata, results_russia, history, is_russia=True)
-                
-            except:
-                print("      ⚠️ Список городов РФ не открылся после клика.")
-        else:
-            print("      ⚠️ Кнопка 'Россия' не найдена в списке стран (нет рейсов?).")
-
-    except Exception as e:
-        print(f"      ❌ Ошибка: {e}")
-
+        # Ждем появления ГОРОДОВ (city-name)
+        try:
+            page.wait_for_selector("[data-test-id='city-name']", timeout=10000)
+            time.sleep(2) # Даем списку прогрузиться
+            
+            results_russia = {}
+            # Теперь ищем кнопки с городами
+            city_buttons = page.locator("button:has([data-test-id='city-name'])").all()
+            
+            for btn in city_buttons:
+                try:
+                    name_el = btn.locator("[data-test-id='city-name']").first
+                    price_el = btn.locator("[data-test-id='text']").last
+                    
+                    name = name_el.inner_text().strip()
+                    price_text = price_el.inner_text().strip()
+                    price = parse_price(price_text)
+                    
+                    if price > 0:
+                        results_russia[name] = price
+                except: continue
+            
+            # Обрабатываем и сохраняем РОССИЮ
+            analyze_and_notify(origin_name, iata, results_russia, history, is_russia=True)
+            
+        except:
+            print("      ⚠️ Список городов РФ не открылся после клика.")
+    else:
+        print("      ⚠️ Кнопка 'Россия' не найдена в списке стран (нет рейсов?).")
+        
 def analyze_and_notify(origin_name, iata, results, history, is_russia):
     if iata not in history:
         history[iata] = {}
