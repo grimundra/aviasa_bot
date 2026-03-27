@@ -79,6 +79,16 @@ def send_telegram_message(text):
         time.sleep(0.1)
     except: pass
 
+def send_telegram_photo(photo_path, caption):
+    if not TELEGRAM_BOT_TOKEN: return
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
+        with open(photo_path, 'rb') as photo:
+            payload = {"chat_id": TELEGRAM_CHANNEL_ID, "caption": caption}
+            requests.post(url, data=payload, files={"photo": photo}, timeout=15)
+    except Exception as e:
+        print(f"❌ Ошибка отправки скриншота в ТГ: {e}")
+
 def parse_price(text):
     if not text: return 0
     clean = re.sub(r'[^0-9]', '', text)
@@ -98,8 +108,8 @@ def process_page(page, origin_name, iata, history):
             if attempt > 1:
                 print(f"      🔄 Попытка {attempt}: страница тупит, пробуем перезагрузить...")
             
-            # Ждем именно загрузки всех ресурсов страницы (load)
-            page.goto(url, timeout=60000, wait_until="load")
+            # Возвращаем БЫСТРУЮ загрузку (domcontentloaded)
+            page.goto(url, timeout=60000, wait_until="domcontentloaded")
             
             # Ждем загрузки списка стран
             page.wait_for_selector("[data-test-id='country-name']", timeout=20000)
@@ -111,12 +121,23 @@ def process_page(page, origin_name, iata, history):
             print(f"      ⚠️ Ошибка на попытке {attempt} (не прогрузилось).")
             time.sleep(2) # Даем паузу перед второй попыткой
 
-    # Если после 2 попыток успех так и не наступил — сдаемся и переходим к след. городу
+    # --- ФОТОФИКСАЦИЯ ОШИБКИ И ОТПРАВКА В ТГ ---
     if not success:
-        print("      ❌ Список стран так и не появился. Пропускаем город.")
+        print("      ❌ Список стран так и не появился. Делаю скриншот для ТГ...")
+        screenshot_path = f"error_{iata}.png"
+        try:
+            # Делаем снимок экрана
+            page.screenshot(path=screenshot_path)
+            # Отправляем в Телегу
+            send_telegram_photo(screenshot_path, f"⚠️ Ошибка парсинга: {origin_name} ({iata})\nСписок стран не загрузился. Посмотри, что на экране ☝️")
+            # Удаляем фотку с сервера, чтобы не копила мусор
+            if os.path.exists(screenshot_path):
+                os.remove(screenshot_path)
+        except Exception as e:
+            print(f"      ❌ Не удалось сделать или отправить скриншот: {e}")
+            
         return
 
-    # ВНИМАНИЕ: отступы вернулись на место!
     time.sleep(3) # Анимации
 
     # ================================
