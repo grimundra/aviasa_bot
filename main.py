@@ -3,7 +3,6 @@ import time
 import json
 import re
 import requests
-import random
 from playwright.sync_api import sync_playwright
 
 # --- НАСТРОЙКИ ---
@@ -11,37 +10,20 @@ TELEGRAM_BOT_TOKEN = os.getenv('TG_TOKEN')
 TELEGRAM_CHANNEL_ID = os.getenv('TG_CHAT_ID')
 HISTORY_FILE = "history_avia.json"
 
-# Достаем настройки прокси из GitHub Secrets
 PROXY_LOGIN = os.getenv('PROXY_LOGIN')
 PROXY_PASS = os.getenv('PROXY_PASS')
 PROXY_IP = os.getenv('PROXY_IP')
 PROXY_PORT = os.getenv('PROXY_PORT')
 
 ORIGINS = {
-    "Москва": "MOW",
-    "Санкт-Петербург": "LED",
-    "Екатеринбург": "SVX",
-    "Сочи": "AER",
-    "Самара": "KUF",
-    "Нижний Новгород": "GOJ",
-    "Тюмень": "TJM",
-    "Новосибирск": "OVB",
-    "Казань": "KZN",
-    "Уфа": "UFA",
-    "Краснодар": "KRR",
-    "Владивосток": "VVO",
-    "Калининград": "KGD",
-    "Волгоград": "VOG",
-    "Челябинск": "CEK",
-    "Пермь": "PEE",
-    "Омск": "OMS",
-    "Красноярск": "KJA",
-    "Иркутск": "IKT",
-    "Благовещенск": "BQS",
-    "Хабаровск": "KHV",
-    "Махачкала": "MCX",
-    "Астана": "NQZ",
-    "Алматы": "ALA",
+    "Москва": "MOW", "Санкт-Петербург": "LED", "Екатеринбург": "SVX",
+    "Сочи": "AER", "Самара": "KUF", "Нижний Новгород": "GOJ",
+    "Тюмень": "TJM", "Новосибирск": "OVB", "Казань": "KZN",
+    "Уфа": "UFA", "Краснодар": "KRR", "Владивосток": "VVO",
+    "Калининград": "KGD", "Волгоград": "VOG", "Челябинск": "CEK",
+    "Пермь": "PEE", "Омск": "OMS", "Красноярск": "KJA",
+    "Иркутск": "IKT", "Благовещенск": "BQS", "Хабаровск": "KHV",
+    "Махачкала": "MCX", "Астана": "NQZ", "Алматы": "ALA",
     "Ташкент": "TAS"
 }
 
@@ -59,16 +41,14 @@ def load_history():
         try:
             with open(HISTORY_FILE, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except:
-            return {}
+        except: return {}
     return {}
 
 def save_history(history):
     try:
         with open(HISTORY_FILE, "w", encoding="utf-8") as f:
             json.dump(history, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        print(f"❌ Ошибка сохранения: {e}")
+    except Exception as e: print(f"❌ Ошибка сохранения: {e}")
 
 def send_telegram_message(text):
     if not TELEGRAM_BOT_TOKEN: return
@@ -96,177 +76,149 @@ def parse_price(text):
     return 0
 
 def process_page(page, origin_name, iata, history):
-    # 1. Загружаем страницу (Мир)
     url = f"https://www.aviasales.ru/map?center=98.189,62.485&params={iata}ANYWHERE1&zoom=1.3"
     print(f"    🌍 Загрузка карты: {url}")
     
     success = False
-    
-    # --- ВНЕДРЯЕМ МЕХАНИЗМ ПОВТОРНЫХ ПОПЫТОК (RETRY) ---
-    for attempt in range(1, 3):  # Делаем максимум 2 попытки
+    for attempt in range(1, 3):
         try:
-            if attempt > 1:
-                print(f"      🔄 Попытка {attempt}: страница тупит, пробуем перезагрузить...")
-            
-            # Возвращаем БЫСТРУЮ загрузку (domcontentloaded)
+            if attempt > 1: print(f"      🔄 Попытка {attempt}: перезагружаем...")
+            # Быстрая загрузка
             page.goto(url, timeout=60000, wait_until="domcontentloaded")
-            
-            # Ждем загрузки списка стран
-            page.wait_for_selector("[data-test-id='country-name']", timeout=20000)
-            
+            # Ждем новый класс коллекций
+            page.wait_for_selector("[data-test-id='price-map-v2-cities-collection']", timeout=20000)
             success = True
-            break  # Если всё нашли, прерываем цикл попыток и идем дальше!
-            
-        except Exception as e:
-            print(f"      ⚠️ Ошибка на попытке {attempt} (не прогрузилось).")
-            time.sleep(2) # Даем паузу перед второй попыткой
+            break
+        except:
+            print(f"      ⚠️ Ошибка на попытке {attempt}.")
+            time.sleep(2)
 
-    # --- ФОТОФИКСАЦИЯ ОШИБКИ И ОТПРАВКА В ТГ ---
+    # Фотофиксация ошибки
     if not success:
-        print("      ❌ Список стран так и не появился. Делаю скриншот для ТГ...")
+        print("      ❌ Контейнеры стран не появились. Делаю скриншот...")
         screenshot_path = f"error_{iata}.png"
         try:
-            # Делаем снимок экрана
             page.screenshot(path=screenshot_path)
-            # Отправляем в Телегу
-            send_telegram_photo(screenshot_path, f"⚠️ Ошибка парсинга: {origin_name} ({iata})\nСписок стран не загрузился. Посмотри, что на экране ☝️")
-            # Удаляем фотку с сервера, чтобы не копила мусор
-            if os.path.exists(screenshot_path):
-                os.remove(screenshot_path)
-        except Exception as e:
-            print(f"      ❌ Не удалось сделать или отправить скриншот: {e}")
-            
+            send_telegram_photo(screenshot_path, f"⚠️ Ошибка парсинга: {origin_name} ({iata})\nНовый интерфейс не загрузился.")
+            if os.path.exists(screenshot_path): os.remove(screenshot_path)
+        except: pass
         return
 
-    time.sleep(3) # Анимации
+    time.sleep(3)
 
-    # ================================
-    # ЭТАП 1: ПАРСИМ СТРАНЫ (МИР)
-    # ================================
     results_world = {}
-    russia_button = None # Сюда запомним кнопку "Россия"
+    russia_all_cities_btn = None
     
-    # Ищем все кнопки со странами
-    buttons = page.locator("button:has([data-test-id='country-name'])").all()
+    # 1. ПАРСИМ МИР ПО НОВОЙ СТРУКТУРЕ (БЛОКАМ)
+    collections = page.locator("[data-test-id='price-map-v2-cities-collection']").all()
     
-    for btn in buttons:
+    for col in collections:
         try:
-            name_el = btn.locator("[data-test-id='country-name']").first
-            price_el = btn.locator("[data-test-id='text']").last
+            # Название страны
+            country_name = col.locator("h3[data-test-id='text']").inner_text().strip()
             
-            name = name_el.inner_text().strip()
-            price_text = price_el.inner_text().strip()
-            price = parse_price(price_text)
+            if "Россия" in country_name:
+                # Запоминаем кнопку "Все города" для России
+                btn = col.locator("button[data-test-id='all-cities-button']")
+                if btn.count() > 0:
+                    russia_all_cities_btn = btn.first
+                continue # Пропускаем парсинг России тут, пойдем на полную страницу
             
-            if price > 0:
-                results_world[name] = price
-            
-            # Если нашли Россию - запоминаем эту кнопку, чтобы потом кликнуть
-            if "Россия" in name:
-                russia_button = btn
-                
+            # Парсим карточки городов внутри блока страны
+            city_cards = col.locator("button[data-test-id='city-card']").all()
+            for card in city_cards:
+                try:
+                    city_name = card.locator("[data-test-id='city-name']").inner_text().strip()
+                    price_text = card.locator("[data-test-id='text']").inner_text().strip()
+                    price = parse_price(price_text)
+                    if price > 0:
+                        # Сохраняем и город, и страну, чтобы потом подтянуть флаг
+                        results_world[city_name] = {"price": price, "country": country_name}
+                except: continue
         except: continue
         
-    # Обрабатываем и сохраняем МИР
     analyze_and_notify(origin_name, iata, results_world, history, is_russia=False)
 
-    # ================================
-    # ЭТАП 2: КЛИКАЕМ И ПАРСИМ РОССИЮ
-    # ================================
-    if russia_button:
-        print("      🖱️ Кликаю на 'Россия'...")
+    # 2. КЛИКАЕМ "ВСЕ ГОРОДА" ДЛЯ РОССИИ
+    if russia_all_cities_btn:
+        print("      🖱️ Кликаю 'Все города' для России...")
         try:
-            russia_button.click()
-        except:
-            print("      ⚠️ Не удалось кликнуть по кнопке 'Россия'.")
+            russia_all_cities_btn.scroll_into_view_if_needed()
+            time.sleep(1)
+            russia_all_cities_btn.click()
+        except Exception as e:
+            print(f"      ⚠️ Ошибка клика 'Все города': {e}")
             return
             
-        # Ждем появления ГОРОДОВ (city-name)
         try:
-            page.wait_for_selector("[data-test-id='city-name']", timeout=10000)
-            time.sleep(2) # Даем списку прогрузиться
+            # Ждем появления карточек на новой странице
+            page.wait_for_selector("button[data-test-id='city-card']", timeout=15000)
+            time.sleep(2)
             
             results_russia = {}
-            # Теперь ищем кнопки с городами
-            city_buttons = page.locator("button:has([data-test-id='city-name'])").all()
-            
-            for btn in city_buttons:
+            city_cards = page.locator("button[data-test-id='city-card']").all()
+            for card in city_cards:
                 try:
-                    name_el = btn.locator("[data-test-id='city-name']").first
-                    price_el = btn.locator("[data-test-id='text']").last
-                    
-                    name = name_el.inner_text().strip()
-                    price_text = price_el.inner_text().strip()
+                    city_name = card.locator("[data-test-id='city-name']").inner_text().strip()
+                    price_text = card.locator("[data-test-id='text']").inner_text().strip()
                     price = parse_price(price_text)
-                    
                     if price > 0:
-                        results_russia[name] = price
+                        results_russia[city_name] = {"price": price, "country": "Россия"}
                 except: continue
             
-            # Обрабатываем и сохраняем РОССИЮ
             analyze_and_notify(origin_name, iata, results_russia, history, is_russia=True)
-            
         except:
-            print("      ⚠️ Список городов РФ не открылся после клика.")
+            print("      ⚠️ Страница 'Все города' РФ не загрузилась.")
     else:
-        print("      ⚠️ Кнопка 'Россия' не найдена в списке стран (нет рейсов?).")
-        
-def analyze_and_notify(origin_name, iata, results, history, is_russia):
-    if iata not in history:
-        history[iata] = {}
+        print("      ⚠️ Блок 'Россия' или кнопка 'Все города' не найдены.")
 
+# Обновленная функция отправки: теперь она работает со структурой {"price": 100, "country": "Турция"}
+def analyze_and_notify(origin_name, iata, results, history, is_russia):
+    if iata not in history: history[iata] = {}
     if not results:
         print(f"      💤 {'РФ' if is_russia else 'Мир'}: 0 направлений.")
         return
 
     count_drops = 0
-    
-    for dest_name, price in results.items():
-        # --- ФИЛЬТР: ИГНОРИРУЕМ БИЛЕТЫ ДОРОЖЕ 40 000 ₽ ---
+    for dest_city, data in results.items():
+        price = data["price"]
+        country = data["country"]
+
         if price > 40000:
-            history[iata][dest_name] = price # Сохраняем в базу, но пропускаем логику рассылки
+            history[iata][dest_city] = price
             continue
-        # ---------------------------------------------------
 
-        old_price = history[iata].get(dest_name)
+        old_price = history[iata].get(dest_city)
         should_notify = False
-        msg = ""
         
-        flag = FLAGS.get(dest_name, "")
-        if is_russia or dest_name in ["Москва", "Сочи", "Санкт-Петербург", "Казань", "Калининград"]:
-            flag = "🇷🇺"
+        flag = FLAGS.get(country, "")
+        if is_russia or country == "Россия": flag = "🇷🇺"
 
-        if old_price:
-            if price < old_price:
-                diff = old_price - price
-                # Фильтр: > 100 руб И (>3% или >500р)
-                if diff > 100 and (diff / old_price > 0.03 or diff > 500):
-                    msg = (
-                        f"📉 <b>Цена СНИЗИЛАСЬ!</b>\n"
-                        f"✈️ {origin_name} -> {flag} {dest_name}\n"
-                        f"💰 <b>{price:,} ₽</b> (было {old_price:,})\n"
-                        f"🔻 Выгода: {diff:,} ₽"
-                    )
-                    should_notify = True
-                    count_drops += 1
-        
-        history[iata][dest_name] = price
-        
-        if should_notify:
-            send_telegram_message(msg)
+        if old_price and price < old_price:
+            diff = old_price - price
+            if diff > 100 and (diff / old_price > 0.03 or diff > 500):
+                msg = (
+                    f"📉 <b>Цена СНИЗИЛАСЬ!</b>\n"
+                    f"✈️ {origin_name} -> {flag} {dest_city}\n"
+                    f"💰 <b>{price:,} ₽</b> (было {old_price:,})\n"
+                    f"🔻 Выгода: {diff:,} ₽"
+                )
+                should_notify = True
+                count_drops += 1
+                send_telegram_message(msg)
+                
+        history[iata][dest_city] = price
 
     if count_drops > 0:
-        print(f"      ✅ {'РФ' if is_russia else 'Мир'}: Снижений - {count_drops}")
+        print(f"      ✅ {'РФ' if is_russia else 'Мир'}: Снижений по городам - {count_drops}")
     else:
-        print(f"      💤 {'РФ' if is_russia else 'Мир'}: {len(results)} напр., без снижений.")
-
+        print(f"      💤 {'РФ' if is_russia else 'Мир'}: {len(results)} городов, без снижений.")
 
 def main():
-    print("🚀 AVIASALES CLICKER STARTED (PROXY ENABLED)")
+    print("🚀 AVIASALES CLICKER STARTED (FAST MODE)")
     history = load_history()
     
     with sync_playwright() as p:
-        # Готовим прокси
         proxy_settings = None
         if PROXY_IP and PROXY_PORT:
             proxy_settings = {
@@ -275,39 +227,28 @@ def main():
                 "password": PROXY_PASS
             }
             print(f"🛡️ Прокси подключен: {PROXY_IP}:{PROXY_PORT}")
-        else:
-            print("⚠️ ПРОКСИ НЕ НАЙДЕН в переменных! Запуск напрямую.")
 
-        # Запускаем сам браузер (один раз)
+        # Быстрый режим: один контекст, одна вкладка
         browser = p.chromium.launch(
             headless=True,
             proxy=proxy_settings,
             args=['--disable-blink-features=AutomationControlled']
         )
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            viewport={'width': 1920, 'height': 1080}
+        )
+        page = context.new_page()
         
         for city, iata in ORIGINS.items():
             print(f"\n✈️ {city} ({iata})")
-            
-            # 1. МАГИЯ ЗДЕСЬ: Создаем абсолютно новый, чистый контекст (как инкогнито) для КАЖДОГО города
-            context = browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                viewport={'width': 1920, 'height': 1080}
-            )
-            page = context.new_page()
-            
-            # 2. Обрабатываем город
             process_page(page, city, iata, history)
-            
-            # 3. Уничтожаем улики (закрываем вкладку и чистим куки контекста)
-            page.close()
-            context.close()
-            
-            # 4. Рандомная пауза, как у живого человека (от 4 до 9 секунд)
-            time.sleep(random.uniform(4.0, 9.0))
+            time.sleep(2)
             
         browser.close()
     
     save_history(history)
     print("\n💾 История цен сохранена.")
+
 if __name__ == "__main__":
     main()
