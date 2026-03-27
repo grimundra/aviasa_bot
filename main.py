@@ -87,17 +87,34 @@ def parse_price(text):
 def process_page(page, origin_name, iata, history):
     # 1. Загружаем страницу (Мир)
     url = f"https://www.aviasales.ru/map?center=98.189,62.485&params={iata}ANYWHERE1&zoom=1.3"
-    print(f"   🌍 Загрузка карты: {url}")
+    print(f"    🌍 Загрузка карты: {url}")
     
-    try:
-        page.goto(url, timeout=60000, wait_until="domcontentloaded")
-        
-        # Ждем загрузки списка стран
+    success = False
+    
+    # --- ВНЕДРЯЕМ МЕХАНИЗМ ПОВТОРНЫХ ПОПЫТОК (RETRY) ---
+    for attempt in range(1, 3):  # Делаем максимум 2 попытки
         try:
+            if attempt > 1:
+                print(f"      🔄 Попытка {attempt}: страница тупит, пробуем перезагрузить...")
+            
+            # ИЗМЕНЕНИЕ: Меняем domcontentloaded на load 
+            # (load надежнее, чем networkidle, так как метрики Яндекса могут держать сеть вечно)
+            page.goto(url, timeout=60000, wait_until="load")
+            
+            # Ждем загрузки списка стран
             page.wait_for_selector("[data-test-id='country-name']", timeout=20000)
-        except:
-            print("      ⚠️ Список стран не появился.")
-            return
+            
+            success = True
+            break  # Если всё нашли, прерываем цикл попыток и идем дальше!
+            
+        except Exception as e:
+            print(f"      ⚠️ Ошибка на попытке {attempt} (не прогрузилось).")
+            time.sleep(2) # Даем паузу перед второй попыткой
+
+    # Если после 2 попыток успех так и не наступил — сдаемся и переходим к след. городу
+    if not success:
+        print("      ❌ Список стран так и не появился. Пропускаем город.")
+        return
 
         time.sleep(3) # Анимации
 
