@@ -3,6 +3,7 @@ import time
 import json
 import re
 import requests
+import random
 from playwright.sync_api import sync_playwright
 
 # --- НАСТРОЙКИ ---
@@ -256,27 +257,36 @@ def main():
         else:
             print("⚠️ ПРОКСИ НЕ НАЙДЕН в переменных! Запуск напрямую.")
 
-        # Запускаем браузер с прокси
+        # Запускаем сам браузер (один раз)
         browser = p.chromium.launch(
             headless=True,
             proxy=proxy_settings,
             args=['--disable-blink-features=AutomationControlled']
         )
-        context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            viewport={'width': 1920, 'height': 1080}
-        )
-        page = context.new_page()
         
         for city, iata in ORIGINS.items():
             print(f"\n✈️ {city} ({iata})")
+            
+            # 1. МАГИЯ ЗДЕСЬ: Создаем абсолютно новый, чистый контекст (как инкогнито) для КАЖДОГО города
+            context = browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                viewport={'width': 1920, 'height': 1080}
+            )
+            page = context.new_page()
+            
+            # 2. Обрабатываем город
             process_page(page, city, iata, history)
-            time.sleep(2) # Пауза перед следующим городом
-        
+            
+            # 3. Уничтожаем улики (закрываем вкладку и чистим куки контекста)
+            page.close()
+            context.close()
+            
+            # 4. Рандомная пауза, как у живого человека (от 4 до 9 секунд)
+            time.sleep(random.uniform(4.0, 9.0))
+            
         browser.close()
     
     save_history(history)
     print("\n💾 История цен сохранена.")
-
 if __name__ == "__main__":
     main()
