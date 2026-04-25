@@ -34,6 +34,23 @@ FLAGS = {
     "Грузия": "🇬🇪", "Азербайджан": "🇦🇿", "Индия": "🇮🇳"
 }
 
+# --- УМНЫЕ ЛИМИТЫ ЦЕН ПО ГОРОДАМ ---
+L_MOW = {"Турция": 8000, "Таиланд": 16000, "ОАЭ": 10000, "Египет": 10000, "Китай": 15000, "Вьетнам": 18000, "Мальдивы": 20000, "Шри-Ланка": 16000, "Куба": 25000, "Беларусь": 5000, "Казахстан": 6000, "Узбекистан": 5000, "Армения": 6000, "Грузия": 6000, "Азербайджан": 6000, "Индия": 12000}
+L_SVX = {"Турция": 12000, "Таиланд": 20000, "ОАЭ": 15000, "Египет": 10000, "Китай": 18000, "Вьетнам": 18000, "Мальдивы": 25000, "Шри-Ланка": 20000, "Куба": 25000, "Беларусь": 6000, "Казахстан": 6000, "Узбекистан": 7000, "Армения": 7000, "Грузия": 8000, "Азербайджан": 8000, "Индия": 15000}
+L_AER = {"Турция": 5000, "Таиланд": 20000, "ОАЭ": 10000, "Египет": 10000, "Китай": 20000, "Вьетнам": 20000, "Мальдивы": 25000, "Шри-Ланка": 20000, "Куба": 25000, "Беларусь": 5000, "Казахстан": 6000, "Узбекистан": 6000, "Армения": 3500, "Грузия": 5000, "Азербайджан": 6000, "Индия": 15000}
+L_VVO = {"Турция": 20000, "Таиланд": 15000, "ОАЭ": 20000, "Египет": 20000, "Китай": 10000, "Вьетнам": 15000, "Мальдивы": 25000, "Шри-Ланка": 20000, "Куба": 25000, "Беларусь": 10000, "Казахстан": 8000, "Узбекистан": 8000, "Армения": 10000, "Грузия": 10000, "Азербайджан": 10000, "Индия": 15000}
+
+SMART_LIMITS = {
+    # Москва, Питер, Калининград
+    "MOW": L_MOW, "LED": L_MOW, "KGD": L_MOW,
+    # Екб, Самара, НН, Тюмень, Новосибирск, Казань, Уфа, Волгоград, Челябинск, Пермь, Омск
+    "SVX": L_SVX, "KUF": L_SVX, "GOJ": L_SVX, "TJM": L_SVX, "OVB": L_SVX, "KZN": L_SVX, "UFA": L_SVX, "VOG": L_SVX, "CEK": L_SVX, "PEE": L_SVX, "OMS": L_SVX,
+    # Сочи, Краснодар, Махачкала
+    "AER": L_AER, "KRR": L_AER, "MCX": L_AER,
+    # Владивосток, Красноярск, Иркутск, Благовещенск, Хабаровск
+    "VVO": L_VVO, "KJA": L_VVO, "IKT": L_VVO, "BQS": L_VVO, "KHV": L_VVO
+}
+
 # --- ФУНКЦИИ ---
 
 def load_history():
@@ -134,20 +151,24 @@ def process_page(page, origin_name, iata, history):
         collections = page.locator("[data-test-id='price-map-v2-cities-collection']").all()
         for col in collections:
             try:
+                # Берем название страны из заголовка!
                 country_name = col.locator("h3[data-test-id='text']").inner_text().strip()
                 if "Россия" in country_name:
                     btn = col.locator("button[data-test-id='all-cities-button']")
                     if btn.count() > 0: russia_all_cities_btn = btn.first
                     continue 
-                
+
                 city_cards = col.locator("button[data-test-id='city-card']").all()
                 for card in city_cards:
                     try:
-                        city_name = card.locator("[data-test-id='city-name']").inner_text().strip()
                         price_text = card.locator("[data-test-id='text']").inner_text().strip()
                         price = parse_price(price_text)
+                        
                         if price > 0:
-                            results_world[city_name] = {"price": price, "country": country_name}
+                            # МАГИЯ ГРУППИРОВКИ: Сохраняем под ключом СТРАНЫ, а не города.
+                            # Если страна уже есть, перезаписываем только если цена ниже.
+                            if country_name not in results_world or price < results_world[country_name]["price"]:
+                                results_world[country_name] = {"price": price, "country": country_name}
                     except: continue
             except: continue
             
@@ -178,8 +199,11 @@ def process_page(page, origin_name, iata, history):
                         city_name = card.locator("[data-test-id='city-name']").inner_text().strip()
                         price_text = card.locator("[data-test-id='text']").inner_text().strip()
                         price = parse_price(price_text)
+                        
                         if price > 0:
-                            results_russia[city_name] = {"price": price, "country": "Россия"}
+                            # Для РФ сохраняем по ГОРОДАМ
+                            if city_name not in results_russia or price < results_russia[city_name]["price"]:
+                                results_russia[city_name] = {"price": price, "country": "Россия"}
                     except: continue
                 analyze_and_notify(origin_name, iata, results_russia, history, is_russia=True)
             except:
@@ -206,8 +230,9 @@ def process_page(page, origin_name, iata, history):
                 price = parse_price(price_text)
                 
                 if price > 0:
-                    # Старый интерфейс собирал страны, пакуем их в новый формат
-                    results_world[name] = {"price": price, "country": name}
+                    # Старый интерфейс уже отдает страны, пакуем
+                    if name not in results_world or price < results_world[name]["price"]:
+                        results_world[name] = {"price": price, "country": name}
                 
                 if "Россия" in name:
                     russia_button = btn
@@ -234,7 +259,8 @@ def process_page(page, origin_name, iata, history):
                         price = parse_price(price_text)
                         
                         if price > 0:
-                            results_russia[name] = {"price": price, "country": "Россия"}
+                            if name not in results_russia or price < results_russia[name]["price"]:
+                                results_russia[name] = {"price": price, "country": "Россия"}
                     except: continue
                 
                 analyze_and_notify(origin_name, iata, results_russia, history, is_russia=True)
@@ -250,15 +276,39 @@ def analyze_and_notify(origin_name, iata, results, history, is_russia):
         return
 
     count_drops = 0
-    for dest_city, data in results.items():
+    for dest_name, data in results.items():
         price = data["price"]
         country = data["country"]
 
-        if price > 40000:
-            history[iata][dest_city] = price
-            continue
+        # ==========================================
+        # АВТОМАТИЧЕСКИЙ ФИЛЬТР ЦЕН
+        # ==========================================
+        max_allowed = 25000 # Базовый лимит для любой случайной страны в мире
+        
+        # 1. ПРАВИЛО ДЛЯ СНГ (Астана, Алматы, Ташкент)
+        if iata in ["NQZ", "ALA", "TAS"]:
+            if is_russia or country == "Россия":
+                max_allowed = 5000
+            else:
+                max_allowed = 15000
+        
+        # 2. ПРАВИЛО ДЛЯ РОССИИ
+        else:
+            if is_russia or country == "Россия":
+                max_allowed = 5000
+            else:
+                # 3. ИЩЕМ СТРАНУ В НАШИХ УМНЫХ ЛИМИТАХ
+                specific_limit = SMART_LIMITS.get(iata, {}).get(country)
+                if specific_limit:
+                    max_allowed = specific_limit
 
-        old_price = history[iata].get(dest_city)
+        # Если цена выше лимита — в ТГ не шлем, но в базу пишем (чтобы следить за трендом)
+        if price > max_allowed:
+            history[iata][dest_name] = price
+            continue
+        # ==========================================
+
+        old_price = history[iata].get(dest_name)
         should_notify = False
         
         flag = FLAGS.get(country, "")
@@ -269,7 +319,7 @@ def analyze_and_notify(origin_name, iata, results, history, is_russia):
             if diff > 100 and (diff / old_price > 0.03 or diff > 500):
                 msg = (
                     f"📉 <b>Цена СНИЗИЛАСЬ!</b>\n"
-                    f"✈️ {origin_name} -> {flag} {dest_city}\n"
+                    f"✈️ {origin_name} -> {flag} {dest_name}\n"
                     f"💰 <b>{price:,} ₽</b> (было {old_price:,})\n"
                     f"🔻 Выгода: {diff:,} ₽"
                 )
@@ -277,12 +327,12 @@ def analyze_and_notify(origin_name, iata, results, history, is_russia):
                 count_drops += 1
                 send_telegram_message(msg)
                 
-        history[iata][dest_city] = price
+        history[iata][dest_name] = price
 
     if count_drops > 0:
-        print(f"      ✅ {'РФ' if is_russia else 'Мир'}: Снижений по городам - {count_drops}")
+        print(f"      ✅ {'РФ' if is_russia else 'Мир'}: Снижений по направлениям - {count_drops}")
     else:
-        print(f"      💤 {'РФ' if is_russia else 'Мир'}: {len(results)} городов, без снижений.")
+        print(f"      💤 {'РФ' if is_russia else 'Мир'}: {len(results)} направлений, без снижений.")
 
 def main():
     print("🚀 AVIASALES CLICKER STARTED (FAST MODE)")
