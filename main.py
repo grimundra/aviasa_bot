@@ -3,6 +3,7 @@ import time
 import json
 import re
 import requests
+import random
 from playwright.sync_api import sync_playwright
 
 # --- НАСТРОЙКИ ---
@@ -335,7 +336,7 @@ def analyze_and_notify(origin_name, iata, results, history, is_russia):
         print(f"      💤 {'РФ' if is_russia else 'Мир'}: {len(results)} направлений, без снижений.")
 
 def main():
-    print("🚀 AVIASALES CLICKER STARTED (FAST MODE)")
+    print("🚀 AVIASALES CLICKER STARTED (ISOLATED MODE)")
     history = load_history()
     
     with sync_playwright() as p:
@@ -348,27 +349,37 @@ def main():
             }
             print(f"🛡️ Прокси подключен: {PROXY_IP}:{PROXY_PORT}")
 
-        # Быстрый режим: один контекст, одна вкладка
+        # Запускаем сам браузер один раз
         browser = p.chromium.launch(
             headless=True,
             proxy=proxy_settings,
             args=['--disable-blink-features=AutomationControlled']
         )
-        context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            viewport={'width': 1920, 'height': 1080}
-        )
-        page = context.new_page()
         
         for city, iata in ORIGINS.items():
             print(f"\n✈️ {city} ({iata})")
-            process_page(page, city, iata, history)
-            time.sleep(2)
+            
+            # МАГИЯ ЗДЕСЬ: Создаем ЧИСТЫЙ контекст и новую вкладку для КАЖДОГО города
+            context = browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                viewport={'width': 1920, 'height': 1080}
+            )
+            page = context.new_page()
+            
+            try:
+                process_page(page, city, iata, history)
+            except Exception as e:
+                print(f"   ❌ Критическая ошибка на странице {city}: {e}")
+            finally:
+                # Обязательно закрываем контекст, чтобы очистить куки и кэш
+                context.close() 
+            
+            # Плавающий таймер (защита от анти-бота)
+            sleep_time = random.uniform(3.0, 6.0)
+            print(f"   ⏳ Ждем {sleep_time:.1f} сек. перед следующим городом...")
+            time.sleep(sleep_time)
             
         browser.close()
     
     save_history(history)
     print("\n💾 История цен сохранена.")
-
-if __name__ == "__main__":
-    main()
