@@ -106,7 +106,7 @@ def process_page(page, origin_name, iata, history):
             page.goto(url, timeout=60000, wait_until="networkidle")
             
             # МАГИЯ ЗДЕСЬ: Ждем появления ЛИБО старого, ЛИБО нового интерфейса (через запятую)
-            page.wait_for_selector("[data-test-id='price-map-v2-cities-collection'], [data-test-id='country-name']", timeout=20000)
+            page.wait_for_selector("[data-test-id='price-map-v2-cities-collection'], [data-test-id='country-name']", timeout=30000)
             
             # Проверяем, какой именно интерфейс нам отдал сервер
             if page.locator("[data-test-id='price-map-v2-cities-collection']").count() > 0:
