@@ -100,13 +100,23 @@ def process_page(page, origin_name, iata, history):
     success = False
     interface_type = None
     
-    for attempt in range(1, 3):
+    for attempt in range(1, 5):
         try:
-            if attempt > 1: print(f"      🔄 Попытка {attempt}: перезагружаем...")
+            if attempt > 1: 
+                # Если первая попытка была белым экраном, ждем 5 секунд!
+                # Это нужно, чтобы прокси-провайдер успел откинуть мертвый IP и выдать новый
+                print(f"      🔄 Попытка {attempt}: прокси затупил, даем ему 5 сек и перезагружаем...")
+                time.sleep(5)
+                
             page.goto(url, timeout=60000, wait_until="domcontentloaded")
             
-            # МАГИЯ ЗДЕСЬ: Ждем появления ЛИБО старого, ЛИБО нового интерфейса (через запятую)
-            page.wait_for_selector("[data-test-id='price-map-v2-cities-collection'], [data-test-id='country-name']", timeout=30000)
+            # МАГИЯ ЗДЕСЬ: state="visible" 
+            # Это защита от белого экрана! Скрипт будет ждать, пока контейнер не только скачается, но и РЕАЛЬНО ОРИСУЕТСЯ на экране
+            page.wait_for_selector(
+                "[data-test-id='price-map-v2-cities-collection'], [data-test-id='country-name']", 
+                state="visible", 
+                timeout=30000
+            )
             
             # Проверяем, какой именно интерфейс нам отдал сервер
             if page.locator("[data-test-id='price-map-v2-cities-collection']").count() > 0:
@@ -115,13 +125,14 @@ def process_page(page, origin_name, iata, history):
                 interface_type = "old"
                 
             success = True
-            break
-        except:
-            print(f"      ⚠️ Ошибка на попытке {attempt}.")
-            time.sleep(2)
+            break # Успех! Вырываемся из цикла попыток
+            
+        except Exception as e:
+            err_msg = str(e).split('\n')[0] # Берем только суть ошибки
+            print(f"      ⚠️ Сбой ({attempt}/4): {err_msg}")
 
     if not success:
-        print("      ❌ Контейнеры стран не появились. Делаю скриншот...")
+        print("      ❌ Все 4 попытки провалились. Делаю скриншот...")
         screenshot_path = f"error_{iata}.png"
         try:
             page.screenshot(path=screenshot_path)
@@ -374,8 +385,8 @@ def main():
                 # Обязательно закрываем контекст, чтобы очистить куки и кэш
                 context.close() 
             
-            # Плавающий таймер (защита от анти-бота)
-            sleep_time = random.uniform(3.0, 6.0)
+            # Даем прокси "остыть", чтобы API не выдавал 429 ошибку
+            sleep_time = random.uniform(12.0, 22.0)
             print(f"   ⏳ Ждем {sleep_time:.1f} сек. перед следующим городом...")
             time.sleep(sleep_time)
             
