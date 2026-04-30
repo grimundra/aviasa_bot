@@ -103,7 +103,7 @@ def process_page(page, origin_name, iata, history):
     for attempt in range(1, 3):
         try:
             if attempt > 1: print(f"      🔄 Попытка {attempt}: перезагружаем...")
-            page.goto(url, timeout=60000, wait_until="networkidle")
+            page.goto(url, timeout=60000, wait_until="domcontentloaded")
             
             # МАГИЯ ЗДЕСЬ: Ждем появления ЛИБО старого, ЛИБО нового интерфейса (через запятую)
             page.wait_for_selector("[data-test-id='price-map-v2-cities-collection'], [data-test-id='country-name']", timeout=30000)
