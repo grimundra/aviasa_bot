@@ -383,3 +383,5 @@ def main():
     
     save_history(history)
     print("\n💾 История цен сохранена.")
+if __name__ == "__main__":
+    main()
