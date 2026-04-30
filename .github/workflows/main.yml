@@ -5,6 +5,11 @@ on:
     - cron: '0 5,10,14,18 * * *'
   workflow_dispatch:
 
+# --- ДОБАВЛЯЕМ ВОТ ЭТОТ БЛОК ---
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+# -------------------------------
+
 permissions:
   contents: write
 
