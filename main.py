@@ -100,22 +100,35 @@ def process_page(page, origin_name, iata, history):
     success = False
     interface_type = None
     
+    # 🟢 ЭКСПОНЕНЦИАЛЬНАЯ ЗАДЕРЖКА ПРОКСИ
+    # Если прокси выдал забаненный IP, мы ждем всё дольше перед новой попыткой
+    RETRY_DELAYS = [0, 8, 20, 45] 
+    
     for attempt in range(1, 5):
         try:
-            if attempt > 1: 
-                # Если первая попытка была белым экраном, ждем 5 секунд!
-                # Это нужно, чтобы прокси-провайдер успел откинуть мертвый IP и выдать новый
-                print(f"      🔄 Попытка {attempt}: прокси затупил, даем ему 5 сек и перезагружаем...")
-                time.sleep(5)
+            wait = RETRY_DELAYS[attempt - 1]
+            if wait > 0:
+                print(f"      🔄 Попытка {attempt}: даем прокси {wait} сек на смену IP...")
+                time.sleep(wait)
                 
+            # Ждем только базовой загрузки HTML, никаких networkidle!
             page.goto(url, timeout=60000, wait_until="domcontentloaded")
             
-            # МАГИЯ ЗДЕСЬ: state="visible" 
-            # Это защита от белого экрана! Скрипт будет ждать, пока контейнер не только скачается, но и РЕАЛЬНО ОРИСУЕТСЯ на экране
+            # 🟢 БЫСТРАЯ ПРОВЕРКА "БЕЛОГО ЭКРАНА" (Fast-Fail)
+            # Если страница пустая, не ждем 35 секунд, а сразу вызываем ошибку и идем на следующий круг
+            try:
+                page.wait_for_selector("body", timeout=5000)
+                body_content = page.locator("body").inner_text()
+                if len(body_content.strip()) < 50:
+                    raise Exception("Белый квадрат (пустое тело)")
+            except Exception as e:
+                raise Exception(f"Пустая страница: {e}")
+            
+            # Если тело есть, ждем появления контейнеров с ценами (чтобы они стали видимыми)
             page.wait_for_selector(
                 "[data-test-id='price-map-v2-cities-collection'], [data-test-id='country-name']", 
                 state="visible", 
-                timeout=30000
+                timeout=35000
             )
             
             # Проверяем, какой именно интерфейс нам отдал сервер
@@ -131,6 +144,7 @@ def process_page(page, origin_name, iata, history):
             err_msg = str(e).split('\n')[0] # Берем только суть ошибки
             print(f"      ⚠️ Сбой ({attempt}/4): {err_msg}")
 
+    # Если все 4 попытки провалились
     if not success:
         print("      ❌ Все 4 попытки провалились. Делаю скриншот...")
         screenshot_path = f"error_{iata}.png"
@@ -163,7 +177,7 @@ def process_page(page, origin_name, iata, history):
         collections = page.locator("[data-test-id='price-map-v2-cities-collection']").all()
         for col in collections:
             try:
-                # Берем название страны из заголовка!
+                # Берем название страны из заголовка
                 country_name = col.locator("h3[data-test-id='text']").inner_text().strip()
                 if "Россия" in country_name:
                     btn = col.locator("button[data-test-id='all-cities-button']")
@@ -177,8 +191,6 @@ def process_page(page, origin_name, iata, history):
                         price = parse_price(price_text)
                         
                         if price > 0:
-                            # МАГИЯ ГРУППИРОВКИ: Сохраняем под ключом СТРАНЫ, а не города.
-                            # Если страна уже есть, перезаписываем только если цена ниже.
                             if country_name not in results_world or price < results_world[country_name]["price"]:
                                 results_world[country_name] = {"price": price, "country": country_name}
                     except: continue
@@ -213,7 +225,6 @@ def process_page(page, origin_name, iata, history):
                         price = parse_price(price_text)
                         
                         if price > 0:
-                            # Для РФ сохраняем по ГОРОДАМ
                             if city_name not in results_russia or price < results_russia[city_name]["price"]:
                                 results_russia[city_name] = {"price": price, "country": "Россия"}
                     except: continue
@@ -242,7 +253,6 @@ def process_page(page, origin_name, iata, history):
                 price = parse_price(price_text)
                 
                 if price > 0:
-                    # Старый интерфейс уже отдает страны, пакуем
                     if name not in results_world or price < results_world[name]["price"]:
                         results_world[name] = {"price": price, "country": name}
                 
@@ -367,15 +377,37 @@ def main():
             args=['--disable-blink-features=AutomationControlled']
         )
         
-        for city, iata in ORIGINS.items():
+        # 🟢 БЕЗОПАСНЫЕ USER-AGENTS (Только Chrome/Windows для Windows-лайк контекста)
+        SAFE_UAS = [
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
+        ]
+        
+        # Используем enumerate, чтобы знать порядковый номер города (для долгих пауз)
+        for idx, (city, iata) in enumerate(ORIGINS.items()):
             print(f"\n✈️ {city} ({iata})")
             
-            # МАГИЯ ЗДЕСЬ: Создаем ЧИСТЫЙ контекст и новую вкладку для КАЖДОГО города
+            # 🟢 СОЗДАЕМ "РУССКИЙ" И РАЗНООБРАЗНЫЙ КОНТЕКСТ
             context = browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                viewport={'width': 1920, 'height': 1080}
+                user_agent=random.choice(SAFE_UAS),
+                viewport={'width': 1920, 'height': 1080},
+                locale="ru-RU", # Сообщаем сайту, что у нас русский язык системы
+                timezone_id="Europe/Moscow", # И московское время
+                extra_http_headers={
+                    "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                }
             )
             page = context.new_page()
+            
+            # 🛑 ЭКОНОМИЯ ТРАФИКА ДЛЯ РЕЗИДЕНТСКОГО ПРОКСИ
+            # Запрещаем скачивать картинки, шрифты и медиа. Качаем только голый код!
+            page.route("**/*", lambda route: route.abort() 
+                if route.request.resource_type in ["image", "media", "font"] 
+                else route.continue_()
+            )
             
             try:
                 process_page(page, city, iata, history)
@@ -385,14 +417,21 @@ def main():
                 # Обязательно закрываем контекст, чтобы очистить куки и кэш
                 context.close() 
             
-            # Даем прокси "остыть", чтобы API не выдавал 429 ошибку
-            sleep_time = random.uniform(12.0, 22.0)
-            print(f"   ⏳ Ждем {sleep_time:.1f} сек. перед следующим городом...")
-            time.sleep(sleep_time)
-            
+            # 🟢 УМНЫЕ ПАУЗЫ (Защита от бана по сессии)
+            if idx % 5 == 4: # Срабатывает на 5, 10, 15, 20 городах (т.к. индексы с 0)
+                long_pause = random.uniform(120.0, 180.0)
+                print(f"   ☕ Большой перерыв: отдыхаем {long_pause:.0f} сек...")
+                time.sleep(long_pause)
+            else:
+                # Увеличенная стандартная пауза (чтобы RU-прокси остывал)
+                sleep_time = random.uniform(25.0, 45.0)
+                print(f"   ⏳ Ждем {sleep_time:.1f} сек. перед следующим...")
+                time.sleep(sleep_time)
+                
         browser.close()
     
     save_history(history)
     print("\n💾 История цен сохранена.")
+
 if __name__ == "__main__":
     main()
