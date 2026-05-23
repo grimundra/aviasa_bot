@@ -1,8 +1,6 @@
 name: Avia Price Hunter
 
 on:
-  schedule:
-    - cron: '0 5,10,14,18 * * *'
   workflow_dispatch:
 
 # --- ДОБАВЛЯЕМ ВОТ ЭТОТ БЛОК ---
