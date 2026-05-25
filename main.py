@@ -96,66 +96,76 @@ def parse_price(text):
 def process_page(page, origin_name, iata, history):
     url = f"https://www.aviasales.ru/map?center=98.189,62.485&params={iata}ANYWHERE1&zoom=1.3"
     print(f"    🌍 Загрузка карты: {url}")
-    
+
+    RETRY_DELAYS = [0, 15, 30, 60]
     success = False
     interface_type = None
-    
-    # 🟢 ЭКСПОНЕНЦИАЛЬНАЯ ЗАДЕРЖКА ПРОКСИ
-    # Если прокси выдал забаненный IP, мы ждем всё дольше перед новой попыткой
-    RETRY_DELAYS = [0, 8, 20, 45] 
-    
+
     for attempt in range(1, 5):
+        wait = RETRY_DELAYS[attempt - 1]
+        if wait > 0:
+            print(f"      🔄 Попытка {attempt}: ждем {wait} сек...")
+            time.sleep(wait)
+
         try:
-            wait = RETRY_DELAYS[attempt - 1]
-            if wait > 0:
-                print(f"      🔄 Попытка {attempt}: даем прокси {wait} сек на смену IP...")
-                time.sleep(wait)
-                
-            # Ждем только базовой загрузки HTML, никаких networkidle!
-            page.goto(url, timeout=60000, wait_until="domcontentloaded")
-            
-            # 🟢 БЫСТРАЯ ПРОВЕРКА "БЕЛОГО ЭКРАНА" (Fast-Fail)
-            # Если страница пустая, не ждем 35 секунд, а сразу вызываем ошибку и идем на следующий круг
-            try:
-                page.wait_for_selector("body", timeout=5000)
-                body_content = page.locator("body").inner_text()
-                if len(body_content.strip()) < 50:
-                    raise Exception("Белый квадрат (пустое тело)")
-            except Exception as e:
-                raise Exception(f"Пустая страница: {e}")
-            
-            # Если тело есть, ждем появления контейнеров с ценами (чтобы они стали видимыми)
-            page.wait_for_selector(
-                "[data-test-id='price-map-v2-cities-collection'], [data-test-id='country-name']", 
-                state="visible", 
-                timeout=35000
+            # ✅ load вместо domcontentloaded — ждём полной загрузки ресурсов
+            # (картинки/шрифты всё равно заблокированы роутом, так что не медленнее)
+            page.goto(url, timeout=90000, wait_until="load")
+
+            # ✅ Ждём появления #root и того, что внутри него что-то появилось
+            # Это надёжнее, чем считать символы body
+            page.wait_for_function(
+                "document.querySelector('#root') && document.querySelector('#root').children.length > 0",
+                timeout=15000
             )
-            
-            # Проверяем, какой именно интерфейс нам отдал сервер
+
+            # ✅ Ждём ЛИБО новый, ЛИБО старый интерфейс — с увеличенным таймаутом
+            page.wait_for_selector(
+                "[data-test-id='price-map-v2-cities-collection'], [data-test-id='country-name']",
+                state="visible",
+                timeout=60000  # было 35000 — иногда сайт грузится медленно
+            )
+
             if page.locator("[data-test-id='price-map-v2-cities-collection']").count() > 0:
                 interface_type = "new"
             else:
                 interface_type = "old"
-                
+
             success = True
-            break # Успех! Вырываемся из цикла попыток
-            
+            break
+
         except Exception as e:
-            err_msg = str(e).split('\n')[0] # Берем только суть ошибки
+            err_msg = str(e).split('\n')[0]
             print(f"      ⚠️ Сбой ({attempt}/4): {err_msg}")
 
-    # Если все 4 попытки провалились
+            # ✅ При неудаче — чистим куки и localStorage текущего контекста
+            # (без закрытия контекста, т.к. он снаружи)
+            try:
+                page.evaluate("() => { localStorage.clear(); sessionStorage.clear(); }")
+            except:
+                pass
+            try:
+                page.context.clear_cookies()
+            except:
+                pass
+
     if not success:
         print("      ❌ Все 4 попытки провалились. Делаю скриншот...")
         screenshot_path = f"error_{iata}.png"
         try:
-            page.screenshot(path=screenshot_path)
+            page.screenshot(path=screenshot_path, full_page=True)
             send_telegram_photo(screenshot_path, f"⚠️ Ошибка парсинга: {origin_name} ({iata})\nНи один интерфейс не загрузился.")
-            if os.path.exists(screenshot_path): os.remove(screenshot_path)
-        except: pass
+            if os.path.exists(screenshot_path):
+                os.remove(screenshot_path)
+        except:
+            pass
         return
 
-    time.sleep(2)
+    # ✅ Вместо time.sleep(2) — ждём стабилизации: нет новых сетевых запросов 1 секунду
+    try:
+        page.wait_for_load_state("networkidle", timeout=10000)
+    except:
+        time.sleep(3)  # fallback если networkidle не дождались
 
     if interface_type == "new":
         print("      ✨ Обнаружен НОВЫЙ интерфейс (Города)")
@@ -356,10 +366,71 @@ def analyze_and_notify(origin_name, iata, results, history, is_russia):
     else:
         print(f"      💤 {'РФ' if is_russia else 'Мир'}: {len(results)} направлений, без снижений.")
 
+def check_proxy(proxy_ip, proxy_port, proxy_login, proxy_pass):
+    """Проверяет прокси: доступность, IP и что он российский"""
+    proxy_url = f"http://{proxy_login}:{proxy_pass}@{proxy_ip}:{proxy_port}"
+    proxies = {"http": proxy_url, "https": proxy_url}
+    
+    print(f"🔍 Проверяем прокси {proxy_ip}:{proxy_port}...")
+    
+    # 1. Проверяем базовую доступность и узнаём IP
+    try:
+        r = requests.get("http://ip-api.com/json/?lang=ru", proxies=proxies, timeout=15)
+        data = r.json()
+        
+        ip       = data.get("query", "?")
+        country  = data.get("country", "?")
+        city     = data.get("city", "?")
+        isp      = data.get("isp", "?")
+        
+        print(f"   ✅ Прокси работает!")
+        print(f"   🌍 Внешний IP : {ip}")
+        print(f"   📍 Локация    : {country}, {city}")
+        print(f"   🏢 Провайдер  : {isp}")
+        
+        if data.get("countryCode") == "RU":
+            print(f"   🇷🇺 IP российский — отлично!")
+        else:
+            print(f"   ⚠️  IP НЕ российский (код: {data.get('countryCode')}) — авиасейлс может заблокировать!")
+            
+    except requests.exceptions.ProxyError as e:
+        print(f"   ❌ Прокси недоступен: {e}")
+        return False
+    except requests.exceptions.ConnectTimeout:
+        print(f"   ❌ Таймаут подключения к прокси")
+        return False
+    except Exception as e:
+        print(f"   ❌ Ошибка: {e}")
+        return False
+    
+    # 2. Проверяем, что авиасейлс вообще отвечает через этот прокси
+    try:
+        r2 = requests.get("https://www.aviasales.ru", proxies=proxies, timeout=20)
+        if r2.status_code == 200:
+            print(f"   ✅ Aviasales.ru доступен (статус {r2.status_code})")
+        else:
+            print(f"   ⚠️  Aviasales.ru вернул статус {r2.status_code}")
+    except Exception as e:
+        print(f"   ⚠️  Aviasales.ru не ответил: {e}")
+    
+    return True
+
+
 def main():
     print("🚀 AVIASALES CLICKER STARTED (ISOLATED MODE)")
-    history = load_history()
     
+    # --- ПРОВЕРКА ПРОКСИ ПЕРЕД СТАРТОМ ---
+    if PROXY_IP and PROXY_PORT:
+        proxy_ok = check_proxy(PROXY_IP, PROXY_PORT, PROXY_LOGIN, PROXY_PASS)
+        if not proxy_ok:
+            print("🚨 Прокси не работает. Прерываем запуск.")
+            send_telegram_message("🚨 Парсер не запущен: прокси недоступен!")
+            return
+    else:
+        print("⚠️  Прокси не настроен — работаем без него")
+
+    history = load_history()
+
     with sync_playwright() as p:
         proxy_settings = None
         if PROXY_IP and PROXY_PORT:
@@ -370,66 +441,79 @@ def main():
             }
             print(f"🛡️ Прокси подключен: {PROXY_IP}:{PROXY_PORT}")
 
-        # Запускаем сам браузер один раз
         browser = p.chromium.launch(
             headless=True,
             proxy=proxy_settings,
             args=['--disable-blink-features=AutomationControlled']
         )
-        
-        # 🟢 БЕЗОПАСНЫЕ USER-AGENTS (Только Chrome/Windows для Windows-лайк контекста)
+
         SAFE_UAS = [
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
         ]
-        
-        # Используем enumerate, чтобы знать порядковый номер города (для долгих пауз)
+
+        consecutive_errors = 0  # счётчик ошибок подряд
+
         for idx, (city, iata) in enumerate(ORIGINS.items()):
-            print(f"\n✈️ {city} ({iata})")
-            
-            # 🟢 СОЗДАЕМ "РУССКИЙ" И РАЗНООБРАЗНЫЙ КОНТЕКСТ
+            print(f"\n✈️  [{idx+1}/{len(ORIGINS)}] {city} ({iata})")
+
             context = browser.new_context(
                 user_agent=random.choice(SAFE_UAS),
                 viewport={'width': 1920, 'height': 1080},
-                locale="ru-RU", # Сообщаем сайту, что у нас русский язык системы
-                timezone_id="Europe/Moscow", # И московское время
+                locale="ru-RU",
+                timezone_id="Europe/Moscow",
                 extra_http_headers={
                     "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8",
                     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 }
             )
             page = context.new_page()
-            
-            # 🛑 ЭКОНОМИЯ ТРАФИКА ДЛЯ РЕЗИДЕНТСКОГО ПРОКСИ
-            # Запрещаем скачивать картинки, шрифты и медиа. Качаем только голый код!
-            page.route("**/*", lambda route: route.abort() 
-                if route.request.resource_type in ["image", "media", "font"] 
+
+            page.route("**/*", lambda route: route.abort()
+                if route.request.resource_type in ["image", "media", "font"]
                 else route.continue_()
             )
-            
+
             try:
-                process_page(page, city, iata, history)
+                result = process_page(page, city, iata, history)
+                if result is False:
+                    consecutive_errors += 1
+                    print(f"   ⚠️  Ошибок подряд: {consecutive_errors}")
+                else:
+                    consecutive_errors = 0  # сброс при успехе
             except Exception as e:
+                consecutive_errors += 1
                 print(f"   ❌ Критическая ошибка на странице {city}: {e}")
             finally:
-                # Обязательно закрываем контекст, чтобы очистить куки и кэш
-                context.close() 
-            
-            # 🟢 УМНЫЕ ПАУЗЫ (Защита от бана по сессии)
-            if idx % 5 == 4: # Срабатывает на 5, 10, 15, 20 городах (т.к. индексы с 0)
+                context.close()
+
+            # --- РЕАКЦИЯ НА СЕРИЙНЫЕ СБОИ ---
+            if consecutive_errors >= 3:
+                msg = f"🚨 Парсер: {consecutive_errors} ошибки подряд — IP заблокирован? Пауза 10 минут."
+                print(f"   {msg}")
+                send_telegram_message(msg)
+                time.sleep(600)
+                consecutive_errors = 0
+
+                # Перепроверяем прокси после паузы
+                if PROXY_IP and PROXY_PORT:
+                    print("   🔍 Перепроверяем прокси после паузы...")
+                    check_proxy(PROXY_IP, PROXY_PORT, PROXY_LOGIN, PROXY_PASS)
+
+            # --- ПАУЗЫ МЕЖДУ ГОРОДАМИ ---
+            elif idx % 5 == 4:
                 long_pause = random.uniform(120.0, 180.0)
-                print(f"   ☕ Большой перерыв: отдыхаем {long_pause:.0f} сек...")
+                print(f"   ☕ Большой перерыв: {long_pause:.0f} сек...")
                 time.sleep(long_pause)
             else:
-                # Увеличенная стандартная пауза (чтобы RU-прокси остывал)
                 sleep_time = random.uniform(25.0, 45.0)
-                print(f"   ⏳ Ждем {sleep_time:.1f} сек. перед следующим...")
+                print(f"   ⏳ Ждем {sleep_time:.1f} сек...")
                 time.sleep(sleep_time)
-                
+
         browser.close()
-    
+
     save_history(history)
     print("\n💾 История цен сохранена.")
 
