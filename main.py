@@ -115,8 +115,11 @@ def process_page(page, origin_name, iata, history):
             # ✅ Ждём появления #root и того, что внутри него что-то появилось
             # Это надёжнее, чем считать символы body
             page.wait_for_function(
-                "document.querySelector('#root') && document.querySelector('#root').children.length > 0",
-                timeout=15000
+                """() => {
+                    const body = document.body;
+                    return body && body.innerText && body.innerText.trim().length > 200;
+                }""",
+                timeout=20000
             )
 
             # ✅ Ждём ЛИБО новый, ЛИБО старый интерфейс — с увеличенным таймаутом
@@ -163,9 +166,13 @@ def process_page(page, origin_name, iata, history):
 
     # ✅ Вместо time.sleep(2) — ждём стабилизации: нет новых сетевых запросов 1 секунду
     try:
-        page.wait_for_load_state("networkidle", timeout=10000)
+        page.wait_for_selector(
+            "[data-test-id='city-card'] [data-test-id='text']",
+            state="visible",
+            timeout=15000
+        )
     except:
-        time.sleep(3)  # fallback если networkidle не дождались
+        time.sleep(4)
 
     if interface_type == "new":
         print("      ✨ Обнаружен НОВЫЙ интерфейс (Города)")
